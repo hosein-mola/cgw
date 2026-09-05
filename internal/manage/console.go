@@ -61,7 +61,7 @@ func interactiveConsole() error {
 	fmt.Print(Help)
 	scanner := bufio.NewScanner(os.Stdin)
 	for {
-		fmt.Print("\nproxy> ")
+		fmt.Print("\ncgw> ")
 		if !scanner.Scan() {
 			return scanner.Err()
 		}
@@ -129,7 +129,7 @@ func modelsCommand(home, cfgPath string) error {
 			}
 		}
 	}
-	fmt.Printf("Selected %s. Run it with: proxy run\n", upstream)
+	fmt.Printf("Selected %s. Run it with: cgw run\n", upstream)
 	return nil
 }
 
@@ -248,7 +248,7 @@ func savedModel(home string, c config.Config) (string, error) {
 	}
 	model := strings.TrimSpace(string(b))
 	if _, ok := c.Models[model]; !ok {
-		return "", fmt.Errorf("saved model %q is no longer configured; run proxy models", model)
+		return "", fmt.Errorf("saved model %q is no longer configured; run cgw models", model)
 	}
 	return model, nil
 }
@@ -266,7 +266,7 @@ func fetchArvanModels(home string, c config.Config) ([]string, error) {
 		key = strings.TrimSpace(os.Getenv("ARVANAI_KEY"))
 	}
 	if key == "" {
-		return nil, errors.New("Arvan API key missing; run proxy set-key APIKEY")
+		return nil, errors.New("Arvan API key missing; run cgw set-key APIKEY")
 	}
 	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(provider.BaseURL, "/")+"/models", nil)
 	if err != nil {

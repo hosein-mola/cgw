@@ -46,7 +46,7 @@ func historyCommand(codexHome string, w io.Writer) error {
 		if cwd == "" {
 			cwd = "unknown"
 		}
-		resume := "proxy resume " + entry.ID
+		resume := "cgw resume " + entry.ID
 		if strings.EqualFold(provider, "openai") {
 			resume = "codex resume " + entry.ID
 		}
@@ -129,10 +129,10 @@ func loadCodexHistory(codexHome string) ([]codexHistoryEntry, error) {
 
 func resumeCommand(home, cfgPath string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: proxy resume SESSION_ID [PROMPT]")
+		return errors.New("usage: cgw resume SESSION_ID [PROMPT]")
 	}
 	if !regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`).MatchString(args[0]) {
-		return errors.New("SESSION_ID must be a full Codex UUID from proxy history")
+		return errors.New("SESSION_ID must be a full Codex UUID from cgw history")
 	}
 	path, err := codexPath("")
 	if err != nil {

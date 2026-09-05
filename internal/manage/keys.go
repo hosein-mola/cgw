@@ -81,7 +81,7 @@ func applySecrets(home string, c config.Config) error {
 		}
 	}
 	if !validKey(os.Getenv(c.Auth.ProxyAPIKeyEnv)) {
-		return fmt.Errorf("proxy key missing; run proxy init or set %s", c.Auth.ProxyAPIKeyEnv)
+		return fmt.Errorf("proxy key missing; run cgw init or set %s", c.Auth.ProxyAPIKeyEnv)
 	}
 	return nil
 }

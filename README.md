@@ -5,29 +5,29 @@ and install or restore Codex settings. See [CLI.md](CLI.md) for Windows, Linux, 
 setup, credential storage, model switching, backups, and rollback.
 
 ```text
-proxy init
-proxy set-key YOUR_ARVAN_API_KEY
-proxy start
-proxy models
-proxy run
+cgw init
+cgw set-key YOUR_ARVAN_API_KEY
+cgw start
+cgw models
+cgw run
 ```
 
 ```powershell
 
- .\bin\proxy.exe list
-  .\bin\proxy.exe clear
-  .\bin\proxy.exe models
-  .\bin\proxy.exe history
-  .\bin\proxy.exe resume SESSION_ID
-  .\bin\proxy.exe set-key APIKEY
-  .\bin\proxy.exe del-key
-  .\bin\proxy.exe ls-key
-  .\bin\proxy.exe check
-  .\bin\proxy.exe run
-  .\bin\proxy.exe run codex
+ .\bin\cgw.exe list
+  .\bin\cgw.exe clear
+  .\bin\cgw.exe models
+  .\bin\cgw.exe history
+  .\bin\cgw.exe resume SESSION_ID
+  .\bin\cgw.exe set-key APIKEY
+  .\bin\cgw.exe del-key
+  .\bin\cgw.exe ls-key
+  .\bin\cgw.exe check
+  .\bin\cgw.exe run
+  .\bin\cgw.exe run codex
 ```
 
-Use `./proxy` on Linux/macOS or `.\proxy.exe` on Windows unless the binary is on PATH.
+Use `./cgw` on Linux/macOS or `.\cgw.exe` on Windows unless the binary is on PATH.
 
 A small Go proxy that gives OpenAI Codex CLI a Responses API while using curated coding models through ArvanCloud's Chat Completions API.
 
@@ -128,9 +128,9 @@ supports_websockets = false
 List or change the default Codex model without changing providers:
 
 ```powershell
-.\bin\proxy.exe models
-.\bin\proxy.exe run
-.\bin\proxy.exe run codex
+.\bin\cgw.exe models
+.\bin\cgw.exe run
+.\bin\cgw.exe run codex
 ```
 
 `models` fetches ArvanCloud's live catalog, filters it to strong coding and agent
@@ -140,7 +140,7 @@ Arvan routing configuration. `run` starts Codex with that saved model.
 `run codex` uses the built-in OpenAI provider and your existing ChatGPT subscription.
 `history` lists every local Codex session with its full ID, timestamp, provider, working
 directory, and exact resume command. OpenAI sessions use `codex resume SESSION_ID`;
-managed Arvan sessions use `proxy resume SESSION_ID` so the wrapper can supply the local
+managed Arvan sessions use `cgw resume SESSION_ID` so the wrapper can supply the local
 proxy environment.
 Use `clear` to clear the interactive console or the current terminal on Windows,
 Linux, and macOS.

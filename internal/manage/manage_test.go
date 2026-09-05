@@ -245,7 +245,7 @@ func TestHistoryListsIDsWithoutPrompts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := output.String()
-	if !strings.Contains(text, id) || !strings.Contains(text, "proxy resume "+id) {
+	if !strings.Contains(text, id) || !strings.Contains(text, "cgw resume "+id) {
 		t.Fatalf("proxy session ID or resume command missing: %s", text)
 	}
 	if !strings.Contains(text, "codex resume "+olderID) {

@@ -98,7 +98,7 @@ func start(home, configPath string) error {
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	return errors.New("server did not become ready; run proxy logs --errors or proxy serve to see the startup error")
+	return errors.New("server did not become ready; run cgw logs --errors or cgw serve to see the startup error")
 }
 
 func stop(home string) error {

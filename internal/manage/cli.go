@@ -22,7 +22,7 @@ import (
 const Help = `Codex ArvanCloud Proxy
 
 Usage:
-  proxy COMMAND [options] [arguments]
+  cgw COMMAND [options] [arguments]
 
 Available commands:
   list                         Show this command list
@@ -68,7 +68,7 @@ func Run(args []string) error {
 	if len(args) == 0 {
 		return interactiveConsole()
 	}
-	fs := flag.NewFlagSet("proxy", flag.ContinueOnError)
+	fs := flag.NewFlagSet("cgw", flag.ContinueOnError)
 	homeArg := fs.String("home", "", "private state directory")
 	cfgArg := fs.String("config", "", "server config")
 	fs.Usage = func() { fmt.Print(Help) }
@@ -88,7 +88,7 @@ func Run(args []string) error {
 	}
 	if args[0] == "clear" {
 		if len(args) != 1 {
-			return errors.New("usage: proxy clear")
+			return errors.New("usage: cgw clear")
 		}
 		return clearScreen()
 	}
@@ -123,7 +123,7 @@ func Run(args []string) error {
 	switch args[0] {
 	case "init":
 		if len(args) != 1 {
-			return errors.New("usage: proxy init")
+			return errors.New("usage: cgw init")
 		}
 		unlock, e := lock(filepath.Join(home, "operation.lock"))
 		if e != nil {
@@ -150,7 +150,7 @@ func Run(args []string) error {
 				return e
 			}
 		}
-		fmt.Printf("Initialized %s\nConfig: %s\nNext: proxy set-key APIKEY; proxy start\n", home, cfgPath)
+		fmt.Printf("Initialized %s\nConfig: %s\nNext: cgw set-key APIKEY; cgw start\n", home, cfgPath)
 		return nil
 	case "set-key", "del-key", "ls-key":
 		return keyCommand(home, args)
@@ -165,7 +165,7 @@ func Run(args []string) error {
 		return nil
 	case "start", "stop", "restart":
 		if len(args) != 1 {
-			return fmt.Errorf("usage: proxy %s", args[0])
+			return fmt.Errorf("usage: cgw %s", args[0])
 		}
 		unlock, e := lock(filepath.Join(home, "operation.lock"))
 		if e != nil {
@@ -185,17 +185,17 @@ func Run(args []string) error {
 		return start(home, cfgPath)
 	case "serve":
 		if len(args) > 2 || (len(args) == 2 && args[1] != "--managed") {
-			return errors.New("usage: proxy serve")
+			return errors.New("usage: cgw serve")
 		}
 		return Serve(home, cfgPath, len(args) == 2)
 	case "models":
 		if len(args) != 1 {
-			return errors.New("usage: proxy models")
+			return errors.New("usage: cgw models")
 		}
 		return modelsCommand(home, cfgPath)
 	case "history":
 		if len(args) != 1 {
-			return errors.New("usage: proxy history")
+			return errors.New("usage: cgw history")
 		}
 		path, e := codexPath("")
 		if e != nil {
@@ -213,17 +213,17 @@ func Run(args []string) error {
 	case "codex":
 		return codexCommand(home, cfgPath, args[1:])
 	default:
-		return fmt.Errorf("unknown command %q; run proxy list", args[0])
+		return fmt.Errorf("unknown command %q; run cgw list", args[0])
 	}
 }
 
 func keyCommand(home string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: proxy set-key APIKEY | del-key | ls-key")
+		return errors.New("usage: cgw set-key APIKEY | del-key | ls-key")
 	}
 	if args[0] == "ls-key" {
 		if len(args) != 1 {
-			return errors.New("usage: proxy ls-key")
+			return errors.New("usage: cgw ls-key")
 		}
 		s, err := loadSecrets(home)
 		if err != nil {
@@ -234,17 +234,17 @@ func keyCommand(home string, args []string) error {
 	}
 	if args[0] == "set-key" {
 		if len(args) != 2 {
-			return errors.New("usage: proxy set-key APIKEY")
+			return errors.New("usage: cgw set-key APIKEY")
 		}
 		if !validKey(args[1]) {
 			return errors.New("API key must be nonempty, single-line, and at most 16 KiB")
 		}
 	} else if args[0] == "del-key" {
 		if len(args) != 1 {
-			return errors.New("usage: proxy del-key")
+			return errors.New("usage: cgw del-key")
 		}
 	} else {
-		return errors.New("usage: proxy set-key APIKEY | del-key | ls-key")
+		return errors.New("usage: cgw set-key APIKEY | del-key | ls-key")
 	}
 	unlock, err := lock(filepath.Join(home, "operation.lock"))
 	if err != nil {
@@ -263,20 +263,20 @@ func keyCommand(home string, args []string) error {
 	if err = saveSecrets(home, s); err != nil {
 		return err
 	}
-	fmt.Println("Credential store updated. Run proxy restart to apply to a running server.")
+	fmt.Println("Credential store updated. Run cgw restart to apply to a running server.")
 	return nil
 }
 
 func codexCommand(home, cfgPath string, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: proxy codex install|use|chatgpt|backups|restore|run")
+		return errors.New("usage: cgw codex install|use|chatgpt|backups|restore|run")
 	}
 	action := args[0]
 	rest := args[1:]
 	model := ""
 	if action == "use" {
 		if len(rest) == 0 {
-			return errors.New("usage: proxy codex use MODEL")
+			return errors.New("usage: cgw codex use MODEL")
 		}
 		model = rest[0]
 		rest = rest[1:]
@@ -507,7 +507,7 @@ func check(home, cfgPath string, requested []string) error {
 	}
 	choices := curatedCodingModels(available)
 	if len(choices) == 0 {
-		return errors.New("no curated coding models are configured; run proxy models")
+		return errors.New("no curated coding models are configured; run cgw models")
 	}
 	if len(requested) > 0 {
 		wanted := make(map[string]bool, len(requested))
@@ -575,7 +575,7 @@ func checkCustomToolCall(client *http.Client, baseURL, proxyKey, model string) e
 		if json.Unmarshal(payload, &apiErr) == nil && apiErr.Error.Message != "" {
 			return fmt.Errorf("HTTP %d: %s", resp.StatusCode, apiErr.Error.Message)
 		}
-		return fmt.Errorf("HTTP %d; inspect proxy logs --errors", resp.StatusCode)
+		return fmt.Errorf("HTTP %d; inspect cgw logs --errors", resp.StatusCode)
 	}
 	var result struct {
 		Output []struct {

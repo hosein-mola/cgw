@@ -11,7 +11,7 @@ try {
         $parts = $target.Split('/')
         $env:GOOS = $parts[0]
         $env:GOARCH = $parts[1]
-        $name = "proxy-$($parts[0])-$($parts[1])"
+        $name = "cgw-$($parts[0])-$($parts[1])"
         if ($parts[0] -eq 'windows') { $name += '.exe' }
         & go build -trimpath -o (Join-Path 'bin' $name) ./cmd/proxy
         if ($LASTEXITCODE -ne 0) { throw "Build failed for $target" }

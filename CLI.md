@@ -5,12 +5,12 @@ started from a persistent binary; do not delete or move it while it is running.
 
 | Platform | Build | Invoke |
 | --- | --- | --- |
-| Windows PowerShell | `go build -o bin/proxy.exe ./cmd/proxy` | `.\bin\proxy.exe` |
-| Linux | `go build -o bin/proxy ./cmd/proxy` | `./bin/proxy` |
-| macOS (Intel or Apple Silicon) | `go build -o bin/proxy ./cmd/proxy` | `./bin/proxy` |
+| Windows PowerShell | `go build -o bin/cgw.exe ./cmd/proxy` | `.\bin\cgw.exe` |
+| Linux | `go build -o bin/cgw ./cmd/proxy` | `./bin/cgw` |
+| macOS (Intel or Apple Silicon) | `go build -o bin/cgw ./cmd/proxy` | `./bin/cgw` |
 
-Examples below use `proxy`; substitute the invocation above or put the binary on PATH.
-Run `proxy list` for the complete command list. Global `--home` and `--config` flags
+Examples below use `cgw`; substitute the invocation above or put the binary on PATH.
+Run `cgw list` for the complete command list. Global `--home` and `--config` flags
 go **before** the command. Key input and Codex options go after their subcommand.
 
 To build all five Windows/Linux/macOS targets, run `./scripts/build.ps1` in PowerShell
@@ -20,15 +20,15 @@ in `.exe`, Linux targets are named `linux`, and macOS targets are named `darwin`
 ## First setup
 
 ```text
-proxy init
-proxy set-key YOUR_ARVAN_API_KEY
-proxy ls-key
-proxy start
-proxy status
-proxy codex install
-proxy models
-proxy history
-proxy run
+cgw init
+cgw set-key YOUR_ARVAN_API_KEY
+cgw ls-key
+cgw start
+cgw status
+cgw codex install
+cgw models
+cgw history
+cgw run
 ```
 
 `set-key APIKEY` stores the ArvanCloud credential. `init` creates a random local proxy
@@ -43,15 +43,15 @@ provides a model-specific gateway URL, set that complete URL through `/v1` as
 The wrapper requires Codex CLI on PATH. It installs model profiles, starts the server
 if needed, and passes only the proxy key to the Codex child environment. It does not
 edit shell startup scripts or global environment variables. The server stays running
-after Codex exits; `proxy stop` shuts it down. Existing ChatGPT login data is untouched.
+after Codex exits; `cgw stop` shuts it down. Existing ChatGPT login data is untouched.
 
 ## Update or remove credentials
 
 ```text
-proxy set-key YOUR_NEW_ARVAN_API_KEY
-proxy ls-key
-proxy del-key
-proxy restart
+cgw set-key YOUR_NEW_ARVAN_API_KEY
+cgw ls-key
+cgw del-key
+cgw restart
 ```
 
 Stored keys take precedence over environment variables. Updates apply when the server
@@ -75,8 +75,8 @@ Codex TOML. Known stored/environment keys are redacted from managed logs.
 Override paths for an isolated installation:
 
 ```text
-proxy --home /path/to/private-state init
-proxy --home /path/to/private-state --config /path/to/config.yaml start
+cgw --home /path/to/private-state init
+cgw --home /path/to/private-state --config /path/to/config.yaml start
 ```
 
 Use the same `--home` for subsequent commands. The `PROXY_HOST` environment variable
@@ -86,16 +86,16 @@ client address and port in the YAML; wildcard binds become loopback client URLs.
 ## Server, logs, errors, and checks
 
 ```text
-proxy start
-proxy status
-proxy logs --lines 100
-proxy logs --errors
-proxy logs --follow
-proxy doctor
-proxy check
-proxy check gpt-5-2-codex gemini-3-1-pro-preview
-proxy restart
-proxy stop
+cgw start
+cgw status
+cgw logs --lines 100
+cgw logs --errors
+cgw logs --follow
+cgw doctor
+cgw check
+cgw check gpt-5-2-codex gemini-3-1-pro-preview
+cgw restart
+cgw stop
 ```
 
 `start` detaches the server (hidden on Windows) and waits for readiness. `status`,
@@ -113,19 +113,19 @@ Logs rotate automatically at roughly 5 MiB with one previous file (`server.log.1
 model to produce a Responses custom tool call. Pass proxy or upstream model names to retest only
 specific models. The required-tool request normally ends immediately after the call, and
 does not impose a legacy Chat token-limit field that some newer models reject. Foreground
-operation remains available as `proxy serve`.
+operation remains available as `cgw serve`.
 `start` is a user-session process, not a system service or login/autostart installation.
 
 ## Models and automatic Codex setup
 
 ```text
-proxy models
-proxy history
-proxy resume SESSION_ID
-proxy codex install
-proxy run
-proxy run codex
-proxy codex run --model deepseek-v4-pro -- "Inspect this project"
+cgw models
+cgw history
+cgw resume SESSION_ID
+cgw codex install
+cgw run
+cgw run codex
+cgw codex run --model deepseek-v4-pro -- "Inspect this project"
 ```
 
 `install` registers the local Responses provider and creates one Codex-safe profile
@@ -143,13 +143,13 @@ select `arvan-models.json` independently, so switching takes effect on the first
 `history` reads only the metadata object of each local Codex rollout. It lists the full
 session ID, timestamp, provider, working directory, and exact command without printing
 prompts or responses. OpenAI sessions use `codex resume SESSION_ID`. Managed Arvan
-sessions use `proxy resume SESSION_ID`; the wrapper starts the local proxy when needed
+sessions use `cgw resume SESSION_ID`; the wrapper starts the local proxy when needed
 and passes the ID to Codex's supported `resume` command. Quote an optional prompt after
 the ID if you want to continue the session immediately.
 
-Running `proxy` without a command opens an interactive console. It prints the
-grouped command list and stays open at a `proxy>` prompt until `exit` or `quit`.
-Type `clear` in that console, or run `proxy clear`, to clear Command Prompt,
+Running `cgw` without a command opens an interactive console. It prints the
+grouped command list and stays open at a `cgw>` prompt until `exit` or `quit`.
+Type `clear` in that console, or run `cgw clear`, to clear Command Prompt,
 PowerShell, or a Linux/macOS terminal.
 
 This follows the current [Codex profile-file format](https://learn.chatgpt.com/docs/config-file/config-advanced)
@@ -158,17 +158,17 @@ Codex before using the generated profiles. These changes do not weaken sandbox,
 approval, trust, or tool permissions. Existing project and CLI overrides may still
 take precedence over model settings.
 
-Prefer `proxy codex run` when using stored credentials. Direct `codex` additionally
+Prefer `cgw codex run` when using stored credentials. Direct `codex` additionally
 needs the proxy key in its environment; the wrapper supplies that automatically. The
 CLI does not save bearer tokens in Codex config.
 
 ## Backups, ChatGPT, and rollback
 
 ```text
-proxy codex chatgpt
-proxy codex backups
-proxy codex restore
-proxy codex restore --backup SNAPSHOT.toml
+cgw codex chatgpt
+cgw codex backups
+cgw codex restore
+cgw codex restore --backup SNAPSHOT.toml
 ```
 
 - `chatgpt` selects the built-in OpenAI provider, removes the explicit model and
@@ -192,7 +192,7 @@ in backups. Backups are private, since an existing config might contain sensitiv
 
 Malformed TOML and collisions with existing unmanaged provider/profile names are refused.
 Outside edits are detected before rollback. Review those edits and then use
-`proxy codex restore --force` only if you intend to replace them; the current files
+`cgw codex restore --force` only if you intend to replace them; the current files
 are backed up first, including malformed files. Profile installation and rollback
 operate on several files, each replaced atomically; an OS interruption can leave a
 partial operation. The per-file backup indexes allow retrying rollback safely.
