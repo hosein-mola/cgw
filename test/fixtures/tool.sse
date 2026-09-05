@@ -1,0 +1,6 @@
+data: {"id":"chat_2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_123","type":"function","function":{"name":"exec_command","arguments":"{\"cmd\":\"go "}}]},"finish_reason":null}]}
+
+data: {"id":"chat_2","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"test ./...\"}"}}]},"finish_reason":"tool_calls"}]}
+
+data: [DONE]
+

@@ -1,0 +1,26 @@
+server:
+  host: "127.0.0.1"
+  port: 3002
+
+auth:
+  proxy_api_key_env: "PROXY_API_KEY"
+
+models:
+  deepseek-v4-pro:
+    provider: arvan
+    upstream_model: DeepSeek-V4-Pro
+
+providers:
+  arvan:
+    base_url: "https://api.arvancloudai.ir/v1"
+    api_key_env: "ARVAN_API_KEY"
+    upstream_stream: true
+
+timeouts:
+  connect_seconds: 15
+  upstream_seconds: 300
+  idle_stream_seconds: 300
+
+limits:
+  max_request_bytes: 33554432
+  max_header_bytes: 1048576

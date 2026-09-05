@@ -1,0 +1,2597 @@
+# Codex Responses-to-Chat Proxy in Go
+
+## 1. Goal
+
+Build a production-ready proxy in **Go** that allows **OpenAI Codex CLI** to use **DeepSeek V4 Pro** through both:
+
+* ParsPack
+* ArvanCloud AI
+
+Codex will communicate with the proxy using the **OpenAI Responses API**.
+
+The proxy will translate those requests to the **OpenAI Chat Completions API**, because DeepSeek V4 Pro is exposed by these providers through Chat Completions rather than a fully Codex-compatible Responses API.
+
+Target architecture:
+
+```text
+                  ┌─────────────────────────┐
+                  │        Codex CLI        │
+                  │ wire_api = "responses"  │
+                  └────────────┬────────────┘
+                               │
+                      POST /v1/responses
+                               │
+                               ▼
+                ┌──────────────────────────┐
+                │       Go Proxy           │
+                │                          │
+                │ Responses → Chat         │
+                │ Chat SSE → Responses SSE │
+                │ Tool-call translation    │
+                │ Error translation        │
+                │ Provider failover        │
+                └──────────┬───────────────┘
+                           │
+              ┌────────────┴─────────────┐
+              │                          │
+              ▼                          ▼
+     ParsPack Chat API           ArvanCloud Chat API
+     /v1/chat/completions        /v1/chat/completions
+              │                          │
+              └────────────┬─────────────┘
+                           ▼
+                  DeepSeek V4 Pro
+```
+
+---
+
+# 2. Provider Details
+
+## ParsPack
+
+Base URL:
+
+```text
+https://ai.parspack.com/v1
+```
+
+DeepSeek model ID:
+
+```text
+deepseek/deepseek-v4-pro
+```
+
+Use:
+
+```text
+POST /v1/chat/completions
+```
+
+Do not rely on ParsPack `/v1/responses`.
+
+Observed ParsPack behavior on `/responses`:
+
+```text
+object: chat.completion.chunk
+```
+
+and final stream termination:
+
+```text
+data: [DONE]
+```
+
+That is Chat Completions SSE, not a proper Responses API stream.
+
+---
+
+## ArvanCloud AI
+
+Base URL:
+
+```text
+https://api.arvancloudai.ir/v1
+```
+
+DeepSeek model ID:
+
+```text
+DeepSeek-V4-Pro
+```
+
+Use:
+
+```text
+POST /v1/chat/completions
+```
+
+ArvanCloud exposes `/v1/responses`, but DeepSeek V4 Pro currently reports:
+
+```text
+There are no available channels for model deepseek-v4-pro
+with api type responses
+```
+
+Therefore the proxy must also use Chat Completions for ArvanCloud.
+
+---
+
+# 3. Main Design Principle
+
+Codex must see a correct Responses API.
+
+Providers may continue using Chat Completions internally.
+
+The translation boundary is:
+
+```text
+Codex Responses API
+        ↓
+Internal normalized request
+        ↓
+Chat Completions request
+        ↓
+Provider
+        ↓
+Chat Completions SSE
+        ↓
+Internal normalized events
+        ↓
+Responses API SSE
+        ↓
+Codex
+```
+
+Do not expose upstream provider quirks directly to Codex.
+
+---
+
+# 4. Technology Stack
+
+Use:
+
+```text
+Go 1.24+
+```
+
+Recommended libraries:
+
+```text
+net/http
+encoding/json
+bufio
+context
+log/slog
+sync
+time
+crypto/rand
+encoding/hex
+```
+
+Optional external libraries:
+
+```text
+github.com/go-chi/chi/v5
+github.com/go-playground/validator/v10
+github.com/stretchr/testify
+gopkg.in/yaml.v3
+```
+
+Preferred HTTP router:
+
+```text
+chi
+```
+
+Avoid large frameworks.
+
+The proxy should remain easy to debug and audit.
+
+---
+
+# 5. Project Structure
+
+Recommended project layout:
+
+```text
+codex-deepseek-proxy/
+├── cmd/
+│   └── proxy/
+│       └── main.go
+│
+├── internal/
+│   ├── config/
+│   │   ├── config.go
+│   │   └── loader.go
+│   │
+│   ├── server/
+│   │   ├── server.go
+│   │   ├── middleware.go
+│   │   └── auth.go
+│   │
+│   ├── handlers/
+│   │   ├── responses.go
+│   │   ├── models.go
+│   │   └── health.go
+│   │
+│   ├── providers/
+│   │   ├── provider.go
+│   │   ├── parspack.go
+│   │   ├── arvan.go
+│   │   └── registry.go
+│   │
+│   ├── chat/
+│   │   ├── types.go
+│   │   ├── request.go
+│   │   ├── stream.go
+│   │   └── parser.go
+│   │
+│   ├── responses/
+│   │   ├── types.go
+│   │   ├── request.go
+│   │   ├── converter.go
+│   │   ├── stream.go
+│   │   ├── events.go
+│   │   └── response_builder.go
+│   │
+│   ├── tools/
+│   │   ├── converter.go
+│   │   ├── accumulator.go
+│   │   └── state.go
+│   │
+│   ├── routing/
+│   │   ├── model_router.go
+│   │   └── failover.go
+│   │
+│   ├── errors/
+│   │   ├── errors.go
+│   │   └── translator.go
+│   │
+│   ├── ids/
+│   │   └── ids.go
+│   │
+│   └── logging/
+│       └── logging.go
+│
+├── test/
+│   ├── fixtures/
+│   │   ├── parspack_text.sse
+│   │   ├── parspack_tool.sse
+│   │   ├── arvan_text.sse
+│   │   └── arvan_tool.sse
+│   └── integration/
+│
+├── config.yaml
+├── .env.example
+├── go.mod
+├── go.sum
+├── Dockerfile
+└── README.md
+```
+
+---
+
+# 6. Configuration
+
+Create:
+
+```text
+config.yaml
+```
+
+Example:
+
+```yaml
+server:
+  host: "127.0.0.1"
+  port: 3002
+
+auth:
+  proxy_api_key_env: "PROXY_API_KEY"
+
+models:
+  deepseek-v4-pro:
+    preferred_provider: arvan
+    failover:
+      - arvan
+      - parspack
+
+  deepseek-v4-pro-arvan:
+    provider: arvan
+    upstream_model: DeepSeek-V4-Pro
+
+  deepseek-v4-pro-parspack:
+    provider: parspack
+    upstream_model: deepseek/deepseek-v4-pro
+
+providers:
+  arvan:
+    base_url: "https://api.arvancloudai.ir/v1"
+    api_key_env: "ARVAN_API_KEY"
+    upstream_stream: true
+
+  parspack:
+    base_url: "https://ai.parspack.com/v1"
+    api_key_env: "PARSPACK_API_KEY"
+    upstream_stream: true
+
+timeouts:
+  connect_seconds: 15
+  upstream_seconds: 300
+  idle_stream_seconds: 300
+```
+
+Environment variables:
+
+```text
+PARSPACK_API_KEY=...
+ARVAN_API_KEY=...
+PROXY_API_KEY=...
+```
+
+Never put provider API keys directly inside the YAML file.
+
+---
+
+# 7. Provider Interface
+
+Create a shared provider interface.
+
+Example:
+
+```go
+type Provider interface {
+    ID() string
+    BaseURL() string
+    UpstreamModel(proxyModel string) (string, error)
+
+    CreateChatCompletion(
+        ctx context.Context,
+        req *ChatCompletionRequest,
+    ) (*http.Response, error)
+}
+```
+
+Implement:
+
+```text
+ParsPackProvider
+ArvanProvider
+```
+
+Responsibilities of a provider adapter:
+
+```text
+base URL
+authorization
+upstream model mapping
+provider-specific headers
+small provider quirks
+HTTP request execution
+```
+
+Do not put Responses API translation inside provider adapters.
+
+---
+
+# 8. Model Routing
+
+Expose three proxy-level models:
+
+```text
+deepseek-v4-pro
+deepseek-v4-pro-arvan
+deepseek-v4-pro-parspack
+```
+
+Behavior:
+
+```text
+deepseek-v4-pro
+→ preferred provider
+→ failover provider if required
+```
+
+```text
+deepseek-v4-pro-arvan
+→ Arvan only
+```
+
+```text
+deepseek-v4-pro-parspack
+→ ParsPack only
+```
+
+Provider mapping:
+
+```text
+Proxy:
+deepseek-v4-pro-arvan
+
+Upstream:
+DeepSeek-V4-Pro
+```
+
+and:
+
+```text
+Proxy:
+deepseek-v4-pro-parspack
+
+Upstream:
+deepseek/deepseek-v4-pro
+```
+
+---
+
+# 9. API Endpoints
+
+The proxy must expose:
+
+```text
+POST /v1/responses
+GET  /v1/models
+GET  /health
+GET  /health/providers
+```
+
+Optional:
+
+```text
+GET /metrics
+```
+
+Do not initially implement:
+
+```text
+/v1/chat/completions
+```
+
+unless generic Chat API compatibility is desired later.
+
+---
+
+# 10. Authentication
+
+Codex will authenticate to the proxy.
+
+Expected header:
+
+```text
+Authorization: Bearer <PROXY_API_KEY>
+```
+
+Validate it with constant-time comparison.
+
+Return:
+
+```text
+HTTP 401
+```
+
+for invalid credentials.
+
+Do not forward the proxy API key upstream.
+
+Each upstream provider receives its own API key.
+
+---
+
+# 11. Responses API Request Types
+
+Create Go types for the subset required by Codex.
+
+Example:
+
+```go
+type ResponsesRequest struct {
+    Model        string          `json:"model"`
+    Input        json.RawMessage `json:"input"`
+    Instructions string          `json:"instructions,omitempty"`
+    Tools        []ResponseTool  `json:"tools,omitempty"`
+    ToolChoice   any             `json:"tool_choice,omitempty"`
+    Stream       bool            `json:"stream,omitempty"`
+}
+```
+
+Support:
+
+```text
+string input
+```
+
+Example:
+
+```json
+{
+  "input": "hello"
+}
+```
+
+Also support structured input:
+
+```json
+{
+  "input": [
+    {
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "hello"
+        }
+      ]
+    }
+  ]
+}
+```
+
+Support:
+
+```text
+user messages
+assistant messages
+function call history
+function call outputs
+```
+
+---
+
+# 12. Chat Completions Request Types
+
+Example:
+
+```go
+type ChatCompletionRequest struct {
+    Model       string        `json:"model"`
+    Messages    []ChatMessage `json:"messages"`
+    Tools       []ChatTool    `json:"tools,omitempty"`
+    ToolChoice  any           `json:"tool_choice,omitempty"`
+    Stream      bool          `json:"stream"`
+    Temperature *float64      `json:"temperature,omitempty"`
+}
+```
+
+Message example:
+
+```go
+type ChatMessage struct {
+    Role       string     `json:"role"`
+    Content    any        `json:"content,omitempty"`
+    ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+    ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+```
+
+---
+
+# 13. Request Translation
+
+Implement:
+
+```text
+Responses request
+→ Chat Completions request
+```
+
+Rules:
+
+## Instructions
+
+Responses:
+
+```json
+{
+  "instructions": "You are a coding agent"
+}
+```
+
+Convert to:
+
+```json
+{
+  "role": "system",
+  "content": "You are a coding agent"
+}
+```
+
+---
+
+## User input
+
+Responses:
+
+```json
+{
+  "role": "user",
+  "content": [
+    {
+      "type": "input_text",
+      "text": "Fix this code"
+    }
+  ]
+}
+```
+
+Convert to:
+
+```json
+{
+  "role": "user",
+  "content": "Fix this code"
+}
+```
+
+---
+
+## Assistant messages
+
+Convert to:
+
+```json
+{
+  "role": "assistant",
+  "content": "..."
+}
+```
+
+---
+
+## Function call outputs
+
+Responses-style function result:
+
+```json
+{
+  "type": "function_call_output",
+  "call_id": "call_123",
+  "output": "file contents..."
+}
+```
+
+Convert to:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_123",
+  "content": "file contents..."
+}
+```
+
+This is critical for Codex tool execution.
+
+---
+
+# 14. Tool Translation
+
+Codex will send Responses API tools.
+
+Example:
+
+```json
+{
+  "type": "function",
+  "name": "exec_command",
+  "description": "Execute a command",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "cmd": {
+        "type": "string"
+      }
+    }
+  }
+}
+```
+
+Convert to Chat format:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "exec_command",
+    "description": "Execute a command",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
+```
+
+Support:
+
+```text
+auto
+none
+required
+specific function
+```
+
+for `tool_choice`.
+
+---
+
+# 15. Upstream SSE Parser
+
+Providers return Chat Completions SSE.
+
+Typical data:
+
+```text
+data: {"object":"chat.completion.chunk", ...}
+
+data: {"object":"chat.completion.chunk", ...}
+
+data: [DONE]
+```
+
+Do not assume one TCP read equals one SSE event.
+
+Implement an actual SSE parser.
+
+Suggested API:
+
+```go
+type SSEParser struct {
+    scanner *bufio.Reader
+}
+```
+
+Handle:
+
+```text
+\r\n
+\n
+multiple data: lines
+partial network frames
+empty separator lines
+[DONE]
+```
+
+Pseudo flow:
+
+```text
+read line
+↓
+collect fields
+↓
+blank line
+↓
+dispatch complete SSE event
+```
+
+---
+
+# 16. Chat Chunk Types
+
+Example:
+
+```go
+type ChatCompletionChunk struct {
+    ID      string       `json:"id"`
+    Object  string       `json:"object"`
+    Model   string       `json:"model"`
+    Choices []ChatChoice `json:"choices"`
+    Usage   *Usage       `json:"usage,omitempty"`
+}
+```
+
+Delta:
+
+```go
+type ChatDelta struct {
+    Role             string           `json:"role,omitempty"`
+    Content          *string          `json:"content,omitempty"`
+    ReasoningContent *string          `json:"reasoning_content,omitempty"`
+    ToolCalls        []ToolCallDelta  `json:"tool_calls,omitempty"`
+}
+```
+
+---
+
+# 17. Responses SSE Writer
+
+Codex expects Responses API SSE.
+
+Implement an event writer:
+
+```go
+type SSEWriter struct {
+    w      http.ResponseWriter
+    flusher http.Flusher
+    seq    int64
+}
+```
+
+Example method:
+
+```go
+func (s *SSEWriter) Send(event string, payload any) error
+```
+
+Output:
+
+```text
+event: response.output_text.delta
+data: {...}
+
+```
+
+Always flush:
+
+```go
+s.flusher.Flush()
+```
+
+after each event.
+
+---
+
+# 18. Response Lifecycle
+
+For normal text output, emit events in this logical order:
+
+```text
+response.created
+response.in_progress
+response.output_item.added
+response.content_part.added
+
+response.output_text.delta
+response.output_text.delta
+response.output_text.delta
+
+response.output_text.done
+response.content_part.done
+response.output_item.done
+
+response.completed
+```
+
+The proxy must always emit:
+
+```text
+response.completed
+```
+
+for successfully completed responses.
+
+This is the exact event missing from the current provider implementations.
+
+---
+
+# 19. Sequence Numbers
+
+Every Responses event should include a monotonically increasing:
+
+```json
+{
+  "sequence_number": 1
+}
+```
+
+Then:
+
+```text
+1
+2
+3
+4
+...
+```
+
+Implement with:
+
+```go
+atomic.Int64
+```
+
+or local single-request state.
+
+---
+
+# 20. Stable IDs
+
+Generate stable IDs per response.
+
+Example:
+
+```text
+resp_abcd1234
+msg_abcd1234
+fc_abcd1234
+```
+
+Implement secure random ID generation:
+
+```go
+crypto/rand
+```
+
+Example helper:
+
+```go
+func NewID(prefix string) string
+```
+
+Do not regenerate IDs for each delta.
+
+---
+
+# 21. Text Streaming Translation
+
+Upstream:
+
+```json
+{
+  "delta": {
+    "content": "Hel"
+  }
+}
+```
+
+Proxy:
+
+```text
+event: response.output_text.delta
+data: {
+  "type": "response.output_text.delta",
+  "delta": "Hel"
+}
+```
+
+Next upstream:
+
+```json
+{
+  "delta": {
+    "content": "lo"
+  }
+}
+```
+
+Proxy:
+
+```text
+event: response.output_text.delta
+data: {
+  "type": "response.output_text.delta",
+  "delta": "lo"
+}
+```
+
+Accumulate full text internally.
+
+At completion emit:
+
+```text
+response.output_text.done
+```
+
+with:
+
+```text
+Hello
+```
+
+---
+
+# 22. Tool Call Streaming
+
+This is mandatory for Codex.
+
+DeepSeek may stream tool arguments across many chunks.
+
+Example:
+
+```json
+{
+  "delta": {
+    "tool_calls": [
+      {
+        "index": 0,
+        "id": "call_123",
+        "function": {
+          "name": "exec_command",
+          "arguments": "{\"cmd\":\"go "
+        }
+      }
+    ]
+  }
+}
+```
+
+Next:
+
+```json
+{
+  "delta": {
+    "tool_calls": [
+      {
+        "index": 0,
+        "function": {
+          "arguments": "test ./...\"}"
+        }
+      }
+    ]
+  }
+}
+```
+
+The proxy must accumulate:
+
+```json
+{"cmd":"go test ./..."}
+```
+
+Maintain state:
+
+```go
+type ToolCallState struct {
+    Index     int
+    ID        string
+    Name      string
+    Arguments strings.Builder
+}
+```
+
+Store:
+
+```go
+map[int]*ToolCallState
+```
+
+---
+
+# 23. Tool Call Responses Events
+
+Translate tool calling into Responses events.
+
+Emit:
+
+```text
+response.output_item.added
+```
+
+with an item like:
+
+```json
+{
+  "type": "function_call",
+  "id": "fc_abc",
+  "call_id": "call_123",
+  "name": "exec_command",
+  "arguments": "",
+  "status": "in_progress"
+}
+```
+
+As arguments arrive emit:
+
+```text
+response.function_call_arguments.delta
+```
+
+Example:
+
+```json
+{
+  "type": "response.function_call_arguments.delta",
+  "item_id": "fc_abc",
+  "output_index": 0,
+  "delta": "{\"cmd\":\"go "
+}
+```
+
+At completion emit:
+
+```text
+response.function_call_arguments.done
+```
+
+Then:
+
+```text
+response.output_item.done
+```
+
+The final tool item should contain the complete arguments.
+
+---
+
+# 24. Preserve `call_id`
+
+Preserve upstream:
+
+```text
+call_123
+```
+
+as the Responses:
+
+```text
+call_id
+```
+
+Do not replace it.
+
+Codex will later send:
+
+```json
+{
+  "type": "function_call_output",
+  "call_id": "call_123",
+  "output": "..."
+}
+```
+
+The proxy must map this back to:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_123",
+  "content": "..."
+}
+```
+
+If `call_id` changes, Codex tool execution will break.
+
+---
+
+# 25. Tool Execution Flow
+
+The final working lifecycle must be:
+
+```text
+Codex sends prompt
+        ↓
+Proxy sends Chat request
+        ↓
+DeepSeek requests tool
+        ↓
+Proxy emits function_call
+        ↓
+Codex executes tool
+        ↓
+Codex sends function_call_output
+        ↓
+Proxy converts result to Chat tool message
+        ↓
+DeepSeek receives tool result
+        ↓
+DeepSeek continues answer
+        ↓
+Proxy emits response.completed
+```
+
+This full loop is the core acceptance requirement.
+
+---
+
+# 26. Reasoning Content
+
+ParsPack DeepSeek may return:
+
+```json
+{
+  "reasoning_content": "..."
+}
+```
+
+Do not merge reasoning content into normal assistant text.
+
+Version 1 behavior:
+
+```text
+consume internally
+do not expose
+```
+
+Optional later behavior:
+
+```text
+map to compatible reasoning summary events
+```
+
+Do not implement reasoning events until the basic Codex text and tool flows work reliably.
+
+---
+
+# 27. Upstream Non-Streaming Fallback
+
+Support:
+
+```yaml
+upstream_stream: false
+```
+
+When disabled, call:
+
+```text
+POST /v1/chat/completions
+```
+
+with:
+
+```json
+{
+  "stream": false
+}
+```
+
+Then synthesize Responses streaming locally.
+
+Example:
+
+```text
+Provider returns one complete Chat response
+        ↓
+Proxy constructs:
+response.created
+response.output_item.added
+response.content_part.added
+response.output_text.delta
+response.output_text.done
+response.output_item.done
+response.completed
+```
+
+This fallback is useful if upstream SSE is unreliable.
+
+---
+
+# 28. Client Cancellation
+
+When Codex disconnects or user presses Ctrl+C:
+
+```text
+Codex connection closes
+        ↓
+request.Context().Done()
+        ↓
+cancel upstream request
+```
+
+Use:
+
+```go
+req = req.WithContext(ctx)
+```
+
+Do not leave upstream DeepSeek requests running after Codex disconnects.
+
+---
+
+# 29. Error Handling
+
+Before streaming begins:
+
+```text
+401 → return HTTP 401
+429 → return HTTP 429
+provider error → 502/503
+```
+
+Return Responses-compatible JSON where possible.
+
+Example:
+
+```json
+{
+  "error": {
+    "message": "Upstream provider unavailable",
+    "type": "upstream_error"
+  }
+}
+```
+
+---
+
+# 30. Errors During Streaming
+
+Once SSE begins, do not silently close the connection.
+
+Emit:
+
+```text
+event: response.failed
+```
+
+Example:
+
+```json
+{
+  "type": "response.failed",
+  "response": {
+    "id": "resp_...",
+    "status": "failed",
+    "error": {
+      "code": "upstream_error",
+      "message": "Arvan connection closed unexpectedly"
+    }
+  }
+}
+```
+
+Then close.
+
+Never leave Codex seeing only:
+
+```text
+stream closed before response.completed
+```
+
+without a meaningful error event.
+
+---
+
+# 31. Provider Failover
+
+For:
+
+```text
+deepseek-v4-pro
+```
+
+support:
+
+```text
+Arvan → ParsPack
+```
+
+or configurable reverse order.
+
+Failover allowed only before downstream output starts.
+
+Safe:
+
+```text
+Arvan returns 503
+        ↓
+no Responses SSE emitted yet
+        ↓
+retry ParsPack
+```
+
+Unsafe:
+
+```text
+Arvan emits 500 tokens
+        ↓
+connection dies
+        ↓
+continue from ParsPack
+```
+
+Do not switch providers after content/tool events have been emitted.
+
+---
+
+# 32. Retry Policy
+
+Retry only transient failures:
+
+```text
+408
+429
+500
+502
+503
+504
+network connection reset
+TLS temporary error
+```
+
+Do not retry:
+
+```text
+400
+401
+403
+404
+invalid tool schema
+invalid JSON
+```
+
+Recommended limits:
+
+```text
+provider attempts: 2
+failover attempts: 1 alternate provider
+```
+
+Use exponential backoff:
+
+```text
+250 ms
+500 ms
+1000 ms
+```
+
+with optional jitter.
+
+Do not retry after downstream streaming starts.
+
+---
+
+# 33. `/v1/models`
+
+Return proxy models only.
+
+Example:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "id": "deepseek-v4-pro",
+      "object": "model",
+      "owned_by": "codex-deepseek-proxy"
+    },
+    {
+      "id": "deepseek-v4-pro-arvan",
+      "object": "model",
+      "owned_by": "arvan"
+    },
+    {
+      "id": "deepseek-v4-pro-parspack",
+      "object": "model",
+      "owned_by": "parspack"
+    }
+  ]
+}
+```
+
+Do not forward the huge provider model lists.
+
+---
+
+# 34. Health Endpoint
+
+Implement:
+
+```text
+GET /health
+```
+
+Response:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+Also implement:
+
+```text
+GET /health/providers
+```
+
+Optional response:
+
+```json
+{
+  "providers": {
+    "arvan": {
+      "configured": true
+    },
+    "parspack": {
+      "configured": true
+    }
+  }
+}
+```
+
+Do not call upstream providers on every health request.
+
+Optional:
+
+```text
+?deep=true
+```
+
+can perform real upstream checks.
+
+---
+
+# 35. Structured Logging
+
+Use:
+
+```go
+log/slog
+```
+
+Log fields:
+
+```text
+request_id
+response_id
+proxy_model
+provider
+upstream_model
+status
+duration_ms
+ttft_ms
+tool_calls
+finish_reason
+retry_count
+failover
+upstream_status
+```
+
+Example:
+
+```go
+logger.Info(
+    "response completed",
+    "request_id", requestID,
+    "provider", provider.ID(),
+    "model", proxyModel,
+    "duration_ms", duration.Milliseconds(),
+)
+```
+
+Never log:
+
+```text
+Authorization header
+provider API keys
+proxy API key
+complete prompts by default
+full tool output by default
+```
+
+---
+
+# 36. Request IDs
+
+Assign a request ID for every inbound request.
+
+Accept existing:
+
+```text
+X-Request-ID
+```
+
+or generate one.
+
+Return:
+
+```text
+X-Request-ID: ...
+```
+
+Use it in logs.
+
+---
+
+# 37. HTTP Client Configuration
+
+Do not use `http.DefaultClient`.
+
+Create a tuned client.
+
+Example:
+
+```go
+transport := &http.Transport{
+    MaxIdleConns:        100,
+    MaxIdleConnsPerHost: 20,
+    IdleConnTimeout:     90 * time.Second,
+}
+
+client := &http.Client{
+    Transport: transport,
+}
+```
+
+Do not set a short global timeout that kills long SSE streams.
+
+Instead control lifecycle using:
+
+```text
+context deadlines
+connect timeout
+stream idle timeout
+```
+
+---
+
+# 38. Stream Idle Timeout
+
+Implement an idle timeout independently from total request duration.
+
+Example:
+
+```text
+if no upstream bytes received for 300 seconds
+→ cancel upstream
+→ emit response.failed
+```
+
+Do not kill long responses simply because total duration exceeds a fixed small number.
+
+---
+
+# 39. Backpressure
+
+Write events directly to Codex and flush.
+
+Avoid collecting entire long responses in memory.
+
+Maintain only necessary state:
+
+```text
+final text buffer
+tool argument buffers
+response metadata
+usage
+```
+
+For very large final text, consider configurable limits.
+
+---
+
+# 40. Usage Translation
+
+Upstream may provide:
+
+```json
+{
+  "usage": {
+    "prompt_tokens": 100,
+    "completion_tokens": 50,
+    "total_tokens": 150
+  }
+}
+```
+
+Translate to Responses usage:
+
+```json
+{
+  "input_tokens": 100,
+  "output_tokens": 50,
+  "total_tokens": 150
+}
+```
+
+Preserve reasoning token details where possible, but do not block completion if provider-specific fields differ.
+
+---
+
+# 41. Finish Reasons
+
+Map Chat finish reasons:
+
+```text
+stop
+→ completed
+```
+
+```text
+tool_calls
+→ completed response containing function calls
+```
+
+```text
+length
+→ incomplete
+```
+
+Potential map:
+
+```text
+stop       → response.completed
+tool_calls → response.completed
+length     → response.incomplete
+error      → response.failed
+```
+
+---
+
+# 42. `[DONE]` Handling
+
+Upstream providers may end with:
+
+```text
+data: [DONE]
+```
+
+Do not forward this directly to Codex.
+
+Treat it as:
+
+```text
+upstream transport finished
+```
+
+The proxy must then decide the appropriate Responses final event:
+
+```text
+response.completed
+response.incomplete
+response.failed
+```
+
+For successful normal completion:
+
+```text
+[DONE]
+→ synthesize response.completed
+```
+
+---
+
+# 43. ParsPack Specific Handling
+
+ParsPack upstream:
+
+```text
+https://ai.parspack.com/v1/chat/completions
+```
+
+Upstream model:
+
+```text
+deepseek/deepseek-v4-pro
+```
+
+Expect:
+
+```text
+chat.completion.chunk
+```
+
+Potential DeepSeek field:
+
+```text
+reasoning_content
+```
+
+Ignore `reasoning_content` in first release.
+
+---
+
+# 44. ArvanCloud Specific Handling
+
+ArvanCloud upstream:
+
+```text
+https://api.arvancloudai.ir/v1/chat/completions
+```
+
+Upstream model:
+
+```text
+DeepSeek-V4-Pro
+```
+
+Do not use:
+
+```text
+/v1/responses
+```
+
+for DeepSeek V4 Pro unless provider support changes later.
+
+Provider adapter must preserve exact model capitalization.
+
+---
+
+# 45. Unit Tests
+
+Test the following individually.
+
+## Request conversion
+
+```text
+Responses string input → Chat user message
+```
+
+```text
+instructions → system message
+```
+
+```text
+function_call_output → tool message
+```
+
+```text
+Responses function tool → Chat function tool
+```
+
+---
+
+## SSE parser
+
+Test:
+
+```text
+single-line data
+multi-line data
+partial TCP frames
+CRLF
+LF
+[DONE]
+malformed JSON
+empty events
+```
+
+---
+
+## Text translation
+
+Test:
+
+```text
+content delta
+→ response.output_text.delta
+```
+
+---
+
+## Tool translation
+
+Test:
+
+```text
+tool call first chunk
+```
+
+```text
+tool argument continuation
+```
+
+```text
+multiple parallel tool calls
+```
+
+```text
+tool completion
+```
+
+---
+
+## Completion
+
+Verify every successful fixture produces:
+
+```text
+response.completed
+```
+
+---
+
+# 46. Fixture Tests
+
+Store sanitized real-world SSE fixtures.
+
+Example:
+
+```text
+test/fixtures/parspack_text.sse
+```
+
+Use the actual shape already observed:
+
+```text
+data: {"object":"chat.completion.chunk", ...}
+
+data: [DONE]
+```
+
+Add fixtures for:
+
+```text
+normal text
+reasoning + text
+tool call
+multiple tool calls
+provider error
+unexpected disconnect
+```
+
+---
+
+# 47. Integration Test Matrix
+
+Run the following against both providers.
+
+| Test                       | ParsPack |    Arvan |
+| -------------------------- | -------: | -------: |
+| Simple `hi`                | Required | Required |
+| Long answer                | Required | Required |
+| Streaming text             | Required | Required |
+| One tool call              | Required | Required |
+| Multiple tool calls        | Required | Required |
+| Tool output continuation   | Required | Required |
+| Reasoning output           | Required | Required |
+| Client cancellation        | Required | Required |
+| HTTP 401                   | Required | Required |
+| HTTP 429                   | Required | Required |
+| HTTP 500                   | Required | Required |
+| Network disconnect         | Required | Required |
+| `[DONE]` translation       | Required | Required |
+| Final `response.completed` | Required | Required |
+
+---
+
+# 48. Proxy Curl Test
+
+Before using Codex, test the proxy directly.
+
+PowerShell:
+
+```powershell
+$env:PROXY_API_KEY = "local-secret"
+
+$body = @{
+    model  = "deepseek-v4-pro"
+    input  = "Say hi"
+    stream = $true
+} | ConvertTo-Json -Compress
+
+curl.exe -N "http://127.0.0.1:3002/v1/responses" `
+  -H "Authorization: Bearer $env:PROXY_API_KEY" `
+  -H "Content-Type: application/json" `
+  --data-raw $body
+```
+
+Expected stream must end with:
+
+```text
+event: response.completed
+```
+
+If it does not, do not test Codex yet.
+
+---
+
+# 49. Codex Configuration
+
+Codex:
+
+```toml
+model = "deepseek-v4-pro"
+model_provider = "deepseek_proxy"
+
+[model_providers.deepseek_proxy]
+name = "DeepSeek Proxy"
+base_url = "http://127.0.0.1:3002/v1"
+env_key = "PROXY_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+```
+
+PowerShell:
+
+```powershell
+$env:PROXY_API_KEY = "local-secret"
+
+codex
+```
+
+---
+
+# 50. Codex Acceptance Test 1
+
+Prompt:
+
+```text
+hi
+```
+
+Expected:
+
+```text
+DeepSeek replies
+no reconnect
+no stream closed error
+response.completed received
+```
+
+---
+
+# 51. Codex Acceptance Test 2
+
+Prompt:
+
+```text
+Create a file named hello.txt containing hello world.
+```
+
+Expected:
+
+```text
+DeepSeek requests Codex file/shell tool
+Codex executes tool
+tool output returns through proxy
+DeepSeek processes result
+final answer completes
+```
+
+---
+
+# 52. Codex Acceptance Test 3
+
+Prompt:
+
+```text
+Inspect this Go project and run the tests.
+```
+
+Expected:
+
+```text
+multiple tool calls
+shell execution
+file reading
+possibly multiple model turns
+final completed response
+```
+
+---
+
+# 53. Codex Acceptance Test 4
+
+Test explicit provider models:
+
+```text
+deepseek-v4-pro-arvan
+```
+
+Then:
+
+```text
+deepseek-v4-pro-parspack
+```
+
+Both must work independently.
+
+---
+
+# 54. Codex Acceptance Test 5
+
+Disable Arvan or use an invalid Arvan upstream URL.
+
+Call:
+
+```text
+deepseek-v4-pro
+```
+
+Expected:
+
+```text
+Arvan attempt fails before output
+ParsPack is selected
+response succeeds
+```
+
+Logs should contain:
+
+```text
+failover=true
+```
+
+---
+
+# 55. Graceful Shutdown
+
+Handle:
+
+```text
+SIGINT
+SIGTERM
+```
+
+Use:
+
+```go
+http.Server.Shutdown()
+```
+
+Allow active requests a reasonable shutdown window.
+
+Example:
+
+```text
+10 seconds
+```
+
+---
+
+# 56. Docker Support
+
+Create:
+
+```dockerfile
+FROM golang:1.24-alpine AS build
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /proxy ./cmd/proxy
+
+FROM alpine:latest
+
+WORKDIR /app
+
+COPY --from=build /proxy /app/proxy
+COPY config.yaml /app/config.yaml
+
+EXPOSE 3002
+
+ENTRYPOINT ["/app/proxy"]
+```
+
+Bind locally when using Docker:
+
+```text
+127.0.0.1:3002:3002
+```
+
+Do not expose the proxy publicly by default.
+
+---
+
+# 57. Security Requirements
+
+Must:
+
+```text
+require proxy authentication
+store provider keys in environment variables
+avoid secret logging
+bind localhost by default
+limit request body size
+validate JSON input
+set header limits
+use context cancellation
+```
+
+Recommended maximum request size:
+
+```text
+32 MB
+```
+
+configurable.
+
+---
+
+# 58. Optional Rate Limiting
+
+Later implement local rate limits.
+
+Example:
+
+```text
+requests per minute
+concurrent requests
+```
+
+Do not prioritize this before tool calling works.
+
+---
+
+# 59. Optional Provider Circuit Breaker
+
+Later track repeated provider failures.
+
+Example:
+
+```text
+Arvan:
+5 failures in 30 seconds
+→ temporarily mark unhealthy
+→ route automatic model to ParsPack
+```
+
+Retry Arvan after cooldown.
+
+Do not implement this in the first milestone.
+
+---
+
+# 60. Optional Metrics
+
+Expose Prometheus-compatible:
+
+```text
+/metrics
+```
+
+Metrics:
+
+```text
+proxy_requests_total
+proxy_errors_total
+proxy_request_duration_seconds
+proxy_provider_requests_total
+proxy_provider_failovers_total
+proxy_tool_calls_total
+proxy_active_streams
+proxy_upstream_ttft_seconds
+```
+
+---
+
+# 61. Implementation Milestones
+
+## Milestone 1 — Basic text
+
+Implement:
+
+```text
+POST /v1/responses
+Responses request parsing
+Chat request conversion
+Arvan provider
+ParsPack provider
+Chat SSE parser
+Responses text SSE writer
+response.completed
+```
+
+Acceptance:
+
+```text
+Codex "hi" works
+```
+
+Do not add advanced features before this works.
+
+---
+
+## Milestone 2 — Tools
+
+Implement:
+
+```text
+tool definition translation
+Chat tool_calls parsing
+streamed argument accumulation
+Responses function_call events
+function_call_output conversion
+multi-turn tool execution
+```
+
+Acceptance:
+
+```text
+Codex can create/read/edit files and execute commands
+```
+
+---
+
+## Milestone 3 — Robustness
+
+Implement:
+
+```text
+errors
+timeouts
+client cancellation
+retry logic
+provider failover
+logging
+usage translation
+non-streaming fallback
+```
+
+---
+
+## Milestone 4 — Production Features
+
+Implement:
+
+```text
+Docker
+metrics
+circuit breakers
+config reload
+provider health
+rate limiting
+debug tracing
+```
+
+---
+
+# 62. Critical Implementation Rule
+
+Do not consider the project complete merely because:
+
+```text
+POST /v1/responses
+```
+
+returns text.
+
+The actual goal is Codex agent compatibility.
+
+A working implementation must support:
+
+```text
+model text
+tool calls
+tool outputs
+multiple turns
+streaming
+completion events
+cancellation
+provider errors
+```
+
+---
+
+# 63. Required End-to-End Flow
+
+This exact workflow must succeed:
+
+```text
+Codex
+  ↓
+POST /v1/responses
+  ↓
+Go proxy
+  ↓
+Responses request → Chat request
+  ↓
+Arvan or ParsPack
+  ↓
+DeepSeek V4 Pro
+  ↓
+Chat SSE tool_call
+  ↓
+Go proxy
+  ↓
+Responses function_call events
+  ↓
+Codex executes command
+  ↓
+function_call_output
+  ↓
+Go proxy
+  ↓
+Chat role=tool
+  ↓
+DeepSeek
+  ↓
+final Chat output
+  ↓
+Responses output events
+  ↓
+response.completed
+  ↓
+Codex completes without reconnect
+```
+
+---
+
+# 64. Definition of Done
+
+The project is finished only when all are true:
+
+```text
+[ ] Go proxy starts successfully
+
+[ ] GET /health works
+
+[ ] GET /v1/models works
+
+[ ] Arvan authentication works
+
+[ ] ParsPack authentication works
+
+[ ] deepseek-v4-pro-arvan works
+
+[ ] deepseek-v4-pro-parspack works
+
+[ ] automatic deepseek-v4-pro routing works
+
+[ ] text streaming works
+
+[ ] response.completed is always emitted on success
+
+[ ] tool calls work
+
+[ ] streamed tool arguments work
+
+[ ] function_call_output works
+
+[ ] multiple tool turns work
+
+[ ] multiple tool calls work
+
+[ ] client cancellation works
+
+[ ] upstream errors become Responses errors
+
+[ ] Arvan → ParsPack failover works before streaming
+
+[ ] API keys never appear in logs
+
+[ ] direct curl test works
+
+[ ] Codex interactive mode works
+
+[ ] Codex can modify files
+
+[ ] Codex can run shell commands
+
+[ ] no "stream closed before response.completed"
+
+[ ] Windows usage is documented
+
+[ ] Docker usage is documented
+
+[ ] unit tests pass
+
+[ ] integration tests pass
+```
+
+---
+
+# 65. Priority Order for the Coding Agent
+
+Implement in this exact order:
+
+```text
+1. Project skeleton
+2. Config loader
+3. Provider interface
+4. Arvan adapter
+5. ParsPack adapter
+6. Basic Responses request parser
+7. Responses → Chat request converter
+8. Chat SSE parser
+9. Responses SSE writer
+10. Text streaming
+11. Guaranteed response.completed
+12. Direct curl test
+13. Codex simple text test
+14. Tool schema translation
+15. Tool-call streaming
+16. Tool output continuation
+17. Codex tool test
+18. Error translation
+19. Cancellation
+20. Failover
+21. Logging
+22. Non-streaming fallback
+23. Docker
+24. Metrics and advanced production features
+```
+
+---
+
+# 66. Important Anti-Patterns
+
+Do not:
+
+```text
+forward provider /responses directly
+```
+
+Do not:
+
+```text
+forward data: [DONE] directly to Codex
+```
+
+Do not:
+
+```text
+treat Chat chunks as Responses chunks
+```
+
+Do not:
+
+```text
+change tool call IDs
+```
+
+Do not:
+
+```text
+mix reasoning_content into visible answer text
+```
+
+Do not:
+
+```text
+fail over after output has started
+```
+
+Do not:
+
+```text
+silently close SSE on errors
+```
+
+Do not:
+
+```text
+hardcode API keys
+```
+
+Do not:
+
+```text
+assume one network read equals one SSE event
+```
+
+Do not:
+
+```text
+consider "hi works" sufficient for completion
+```
+
+---
+
+# 67. Final Target
+
+The final product should allow this Codex config:
+
+```toml
+model = "deepseek-v4-pro"
+model_provider = "deepseek_proxy"
+
+[model_providers.deepseek_proxy]
+name = "DeepSeek Proxy"
+base_url = "http://127.0.0.1:3002/v1"
+env_key = "PROXY_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = false
+```
+
+while the Go proxy handles:
+
+```text
+deepseek-v4-pro
+        ↓
+ArvanCloud or ParsPack
+        ↓
+DeepSeek V4 Pro
+```
+
+without Codex ever seeing:
+
+```text
+chat.completion.chunk
+```
+
+or:
+
+```text
+data: [DONE]
+```
+
+Instead Codex must see a valid Responses lifecycle ending in:
+
+```text
+response.completed
+```
+
+That is the core requirement of the entire project.
+
+
+$env::DEEPSEEK_KEY
+$env::ARVANAI_KEY

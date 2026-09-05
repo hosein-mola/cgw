@@ -1,0 +1,1 @@
+{"error":"response failed","status":424,"body":{"error":{"message":"There are no available channels for model deepseek-v4-pro with api type responses in the current group default (request id: 2026090509461391346298446167025)","type":"cupai_error"}}}

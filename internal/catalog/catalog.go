@@ -1,0 +1,37 @@
+package catalog
+
+func Metadata(id, upstreamModel string) map[string]any {
+	return map[string]any{
+		"slug":                              id,
+		"display_name":                      upstreamModel + " (ArvanCloud)",
+		"description":                       upstreamModel + " through ArvanCloud",
+		"default_reasoning_level":           "high",
+		"supported_reasoning_levels":        []any{map[string]any{"effort": "low", "description": "Fast responses with lighter reasoning"}, map[string]any{"effort": "high", "description": "Deeper reasoning for complex coding tasks"}, map[string]any{"effort": "max", "description": "Maximum reasoning depth"}},
+		"shell_type":                        "shell_command",
+		"visibility":                        "list",
+		"supported_in_api":                  true,
+		"priority":                          1,
+		"availability_nux":                  nil,
+		"upgrade":                           nil,
+		"support_verbosity":                 true,
+		"default_verbosity":                 "low",
+		"apply_patch_tool_type":             "freeform",
+		"web_search_tool_type":              "text",
+		"truncation_policy":                 map[string]any{"mode": "tokens", "limit": 10000},
+		"supports_parallel_tool_calls":      true,
+		"supports_image_detail_original":    false,
+		"context_window":                    1048576,
+		"max_context_window":                1048576,
+		"effective_context_window_percent":  95,
+		"experimental_supported_tools":      []any{},
+		"input_modalities":                  []string{"text"},
+		"supports_search_tool":              false,
+		"prefer_websockets":                 false,
+		"use_responses_lite":                false,
+		"include_skills_usage_instructions": true,
+		"auto_review_model_override":        nil,
+		"tool_mode":                         nil,
+		"multi_agent_version":               "v2",
+		"base_instructions":                 "You are Codex, an autonomous coding agent. Work with the user on software engineering tasks, inspect the workspace when useful, and make precise code changes. When a matching skill is available, read and follow its SKILL.md instructions. Use the provided function tools when they are needed, wait for their results, verify your work, and report the result clearly.",
+	}
+}

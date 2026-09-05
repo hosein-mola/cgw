@@ -1,0 +1,45 @@
+package main
+
+
+import (
+  "context"
+  "fmt"
+  "log"
+
+
+  "github.com/sashabaranov/go-openai"
+)
+
+
+func main() {
+  // Create OpenAI client with custom base URL and API key
+  config := openai.DefaultConfig("apikey . . . ")
+  config.BaseURL = "https://arvancloudai.ir/gateway/models/Gemini-2.5-Pro/. . . /v1"
+ 
+  client := openai.NewClientWithConfig(config)
+
+
+  // Create chat completion request
+  resp, err := client.CreateChatCompletion(
+    context.Background(),
+    openai.ChatCompletionRequest{
+      Model: "Gemini-2.5-Pro",
+      Messages: []openai.ChatCompletionMessage{
+        {
+          Role:    openai.ChatMessageRoleUser,
+          Content: "tell me a joke about product managers",
+        },
+      },
+      MaxTokens:   10000,
+      Temperature: 0.8,
+    },
+  )
+
+
+  if err != nil {
+    log.Fatalf("ChatCompletion error: %v", err)
+  }
+
+
+  fmt.Printf("%+v\n", resp)
+}

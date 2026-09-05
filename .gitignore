@@ -1,0 +1,8 @@
+.env
+.gocache/
+.gomodcache/
+.smoke/
+bin/
+*.exe
+.test-tmp/
+/cgw/
